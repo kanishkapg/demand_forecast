@@ -185,7 +185,7 @@ weekly_volume = base_daily_level(series)
 ```
 
 - Estimate the effects from history at daily level, per brand. Fresh and Style react differently. Tech is mostly noise.
-- `base_daily_level` = recent de‑seasonalized level. *(Updated after Phase 4: no trend term. A trend extrapolated over the 10 weeks made every brand worse. Use the mean of the last 8–13 clean weeks.)*
+- `base_daily_level` = recent de‑seasonalized level. *(Updated after Phase 4: no trend term. A trend extrapolated over the 10 weeks made every brand worse. Use the mean of the last 8–13 clean weeks.)* *(Phase 6: a year-on-year growth correction was adopted for Fresh and Style; see Phase 6.)*
 - Festival effect = `ramp × (fest_strength − 1)`, with the strength taken from the last occurrence of the same festival *(Phase 4: r = 0.92 for Fresh)*.
 - Easy to justify to judges and easy to show in the video.
 
@@ -212,6 +212,48 @@ weekly_volume = base_daily_level(series)
 
 - Blend 5.2 and 5.3 (a simple average or a weighted average chosen on validation). This is usually more robust than either model alone.
 
+### As implemented (updated after Phase 5)
+
+Every model is a function of the origin and uses only data up to it. Forecasts for 96 origins are saved to `data/processed/backtest_preds.parquet` for Phase 6.
+
+**Baselines:**
+- `B1_SEASONAL` = `ly_total × yoy8`. The growth ratio uses *clean* weeks, so festivals don't distort it.
+- `B2_RECENT` = `lvl8 × n_operating_days`.
+
+**Structural model (daily):**
+```
+L × f[dow] × (1 + p × payday) × (1 + b[brand, festival] × ramp)
+```
+The week's forecast is the sum over its operating days.
+- `f` (day-of-week factor): learned from clean weeks.
+- `p` (payday uplift): learned per brand.
+- `L` (level): taken from the last 13 clean weeks.
+- `b` (festival slope): for each past festival, least squares on its ramp days relative to the level just before it. The value used is the **mean over that festival's past occurrences** (Phase 4's `fest_strength` used only the last one).
+- **Tech:** flat day-of-week factors, a 26-week level, and one festival slope pooled over all festivals.
+
+**LightGBM:**
+- Target: `y_total / (lvl13 × dow_weight)`.
+- Loss: L1, weighted by `lvl13 × dow_weight`.
+- Shallow trees.
+- Refit at every origin, using only rows whose *target* week is ≤ the origin.
+- Starts at origin 2024 wk 28, the first with at least 600 labelled rows, so there is no LightGBM forecast for F2.
+- The Ridge/GLM alternative was not built, because the structural model already fills the role of a simple, explainable model.
+
+**Chilled:** `pred_total × share_ly_target` for every model except `B2_RECENT`, which uses the recent share.
+
+**Ensemble:** a 50/50 average of `STRUCT` and `LGBM` for now. Phase 6 sets the weights **per brand**.
+
+**Results:** WAPE over total and chilled, on 49 origins and on F1.
+
+| Model | All origins | F1 |
+|---|---|---|
+| Structural | 4.5% | 4.1% |
+| LightGBM | 5.1% | 8.2% |
+| Ensemble | 4.4% | 5.1% |
+| Naive baselines | about 7.5% | about 11.5% |
+
+- **Tech:** every model is at 30–37%.
+
 ---
 
 ## Phase 6: Validation (the most important phase)
@@ -228,6 +270,44 @@ Use the same horizon structure as the real task. **Never use a random split.**
 - Plot actual vs forecast for F1 for every series. That figure also works well in the video.
 - Pick the model or blend weights from F1 plus the average over all folds. Don't tune on F1 alone, because that overfits one festival season.
 
+### As implemented (updated after Phase 6)
+
+**Folds:**
+- **F1:** origin 2025 wk 13.
+- **F2:** origin 2024 wk 13. Only Recent-mean naive and Structural can run here: there is no last year, and too few rows to train LightGBM.
+- **F3, F4, F5:** origins 2025 wk 26, wk 39 and wk 52.
+- **All origins:** 49 rolling origins, 2025 wk 7 to 2026 wk 3. This was added as the most stable average.
+
+**Metrics:**
+- WAPE on total and chilled together (headline);
+- WAPE on total and on chilled separately;
+- MAE, RMSE and bias;
+- broken down per series, per horizon, and per week type (normal, run-up, short).
+
+**Selection rule:** ½ × F1 + ½ × all origins, per brand.
+
+**Added in this phase: a growth correction.** `STRUCT_G = STRUCT × yoy8 ^ ((h + 6.5) / 52)`, for Fresh and Style.
+- Every model forecast too low, by −1.9% for Structural, because the 13-week level lags growth.
+- Unlike Phase 4's `trend26`, this uses year-on-year growth of clean weeks, which is stable.
+- Effect: F1 4.07 → 3.56, F3 5.50 → 4.96, F5 unchanged, F4 4.12 → 4.70. It was adopted.
+
+**Checked and kept:**
+- A 13-week level window. 8 weeks ties overall but is worse on F1 and F2.
+- The mean festival slope. "Last" makes no difference, because the slopes are stable year to year.
+- `share_ly_target` for chilled.
+- **No** Tech wk 17 adjustment. The pattern doesn't hold: Kandy 2025 wk 17 was 0.95.
+
+**Chosen per brand**, saved in `models/task2a/phase6_selection.json`:
+- **Fresh:** 100% Structural + growth.
+- **Style:** 100% Structural + growth.
+- **Tech:** 100% LightGBM.
+
+**Result (FINAL):**
+- All origins: WAPE 4.30%, bias −0.6%.
+- F1: 3.49%.
+- Naive baselines for comparison: 7.5% on all origins and 11.6% on F1.
+- F2: every model is at about 10.5–11%, because there is no past festival season to learn from. It is the worst case, not the expected error.
+
 ---
 
 ## Phase 7: Final fit, prediction and submission
@@ -241,6 +321,44 @@ Use the same horizon structure as the real task. **Never use a random split.**
    - Sanity plot: history plus the forecast for each series. Week 15 (before New Year) should be high, week 16 low, and week 18 low (5 operating days).
    - Compare the totals with the same weeks of 2025 × the growth ratio. Any big difference should have a clear reason.
 4. Write `submission_task2a.csv`.
+
+### As implemented (updated after Phase 7)
+
+**Final fit and saved models.** The chosen models were refit on all data up to 2026 wk 13 and saved to `models/task2a/`:
+
+| File | Content |
+|---|---|
+| `structural_model.json` | All learned parameters of the structural model, human-readable |
+| `lgbm_model.txt` | The LightGBM booster, used for Tech |
+| `phase6_selection.json` | Which model each brand uses, plus the validation scores |
+| `manifest.json` | Training period, the inputs needed at inference, and library versions |
+
+The structural coefficients are saved as JSON rather than pickle, and the LightGBM model as LightGBM's own text format rather than joblib. Both are readable and don't depend on library versions.
+
+**Inference pipeline: the last cell of the notebook (7.4).** It is standalone and uses only files on disk:
+- the models in `models/task2a/`;
+- the test inputs and the template;
+- `features_origin.parquet` (the rows for the 2026 wk 13 origin);
+- `calendar.parquet` (the days of wk 14–23).
+
+It runs these steps:
+1. Load the models.
+2. Build the inputs for the 60 test rows.
+3. Structural forecast, day by day.
+4. Growth correction.
+5. LightGBM forecast.
+6. Per-brand choice.
+7. Chilled = total × last year's share.
+8. Validate and write `submissions/submission_task2a.csv` in template order.
+9. Print the inputs and predictions.
+
+It was verified in a fresh Python process (identical output), and it reproduces the validated Phase 6 forecast exactly.
+
+**Result:**
+- Total 18,685 m³, of which 5,956 m³ chilled.
+- Fresh: +5.6% to +7.7% vs 2025, matching its own year-on-year growth (−0.3% to −0.8% vs 2025 × growth).
+- Tech: +15% to +34% vs 2025. Tech really did grow; Peliyagoda-Tech in 2026 wk 1–13 was +28% vs 2025.
+- Sanity plot: `p7_01_final_forecast.png`.
 
 ---
 

@@ -1,0 +1,32 @@
+{
+  "task": "2A weekly depot x brand volume forecast",
+  "created": "2026-10-08",
+  "forecast_origin": "2026 wk 13 (history ends 2026-03-29)",
+  "forecast_weeks": "2026 wk 14-23",
+  "trained_on": "orders 2024 wk 1 to 2026 wk 13 (deliveries_train + task1_test_inputs)",
+  "files": {
+    "structural_model.json": "learned parameters of the structural model (Fresh, Style; Tech fallback)",
+    "lgbm_model.txt": "LightGBM booster (global, 5970 training rows; used for Tech)",
+    "phase6_selection.json": "which model each brand uses, and the validation scores"
+  },
+  "inputs_at_inference": [
+    "data/raw/Test Data/task2a_test_inputs.csv",
+    "data/raw/Submission Templates/submission_task2a.csv",
+    "data/processed/features_origin.parquet (rows of the 2026 wk 13 origin)",
+    "data/processed/calendar.parquet (wk 14-23 days)"
+  ],
+  "library_versions": {
+    "pandas": "3.0.6",
+    "numpy": "2.5.3",
+    "lightgbm": "4.7.0"
+  },
+  "validation_wape_both_pct": {
+    "F1": 3.49,
+    "F2": 10.48,
+    "F3": 4.99,
+    "F4": 4.74,
+    "F5": 4.5,
+    "mean F1,F3\u2013F5": 4.43,
+    "all origins": 4.3
+  }
+}
